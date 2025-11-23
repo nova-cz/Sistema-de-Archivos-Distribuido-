@@ -22,9 +22,24 @@ logger = logging.getLogger('sistema')
 
 THIS_NODE = "Maq1"  # Opciones: "Maq1", "Maq2", "Maq3", "Maq4"
 
+# ==================== NUEVA CONFIGURACIÓN DE BLOQUES ====================
+
+# Tamaño de bloque en bytes (1 MB = 1024 * 1024 bytes)
+BLOCK_SIZE = 1024 * 1024  # 1 MB
+
+# Capacidad de almacenamiento por nodo en MB
+# ¡FÁCIL DE CAMBIAR! Solo modifica estos valores
+NODE_CAPACITY = {
+    "Maq1": 70,   # 70 MB para Maq1
+    "Maq2": 50,   # 50 MB para Maq2
+    "Maq3": 100,  # 100 MB para Maq3
+    "Maq4": 80,   # 80 MB para Maq4 (si lo usas)
+}
+
+# ========================================================================
+
 def get_ip_address():
     """Obtiene la IP basada en el nodo configurado"""
-    # Definimos las IPs de los nodos
     node_ips = {
         "Maq1": IP_1,
         "Maq2": IP_2,
@@ -32,13 +47,11 @@ def get_ip_address():
         "Maq4": IP_4
     }
     
-    # Devuelve la IP correspondiente al nodo configurado
     if THIS_NODE in node_ips:
         ip = node_ips[THIS_NODE]
         logger.info(f"Usando IP para {THIS_NODE}: {ip}")
         return ip
     else:
-        # Si hay un error en la configuración, intentamos detectar automáticamente
         logger.warning(f"Nodo '{THIS_NODE}' no reconocido, intentando detección automática...")
         return detect_ip_automatically()
 
@@ -47,7 +60,6 @@ def detect_ip_automatically():
     try:
         logger.info("Buscando interfaces de red...")
         
-        # Primero intentar con ifconfig/ip
         try:
             if os.name == 'posix':  # Linux/Unix
                 if os.path.exists('/sbin/ip'):
@@ -64,8 +76,16 @@ def detect_ip_automatically():
                             ip = line.split('inet ')[1].split(' ')[0].strip()
                             logger.info(f"IP encontrada con ifconfig: {ip}")
                             return ip
+            else:  # Windows
+                result = subprocess.run(['ipconfig'], capture_output=True, text=True)
+                for line in result.stdout.split('\n'):
+                    if 'IPv4' in line:
+                        ip = line.split(':')[-1].strip()
+                        if not ip.startswith('127.'):
+                            logger.info(f"IP encontrada con ipconfig: {ip}")
+                            return ip
         except Exception as e:
-            logger.warning(f"Error al usar ifconfig/ip: {e}")
+            logger.warning(f"Error al usar ifconfig/ip/ipconfig: {e}")
         
         # Si no funciona, usar netifaces
         interfaces = netifaces.interfaces()
@@ -76,7 +96,6 @@ def detect_ip_automatically():
                 for link in addresses[netifaces.AF_INET]:
                     ip = link['addr']
                     logger.debug(f"  IP encontrada: {ip}")
-                    # Solo evitar localhost
                     if not ip.startswith('127.'):
                         logger.info(f"IP seleccionada: {ip}")
                         return ip
@@ -148,3 +167,11 @@ logger.info(f"Intervalo de heartbeat: {HEARTBEAT_INTERVAL} segundos")
 # Tiempo máximo sin recibir heartbeat antes de considerar un nodo caído (segundos)
 NODE_TIMEOUT = 8
 logger.info(f"Timeout de nodo: {NODE_TIMEOUT} segundos")
+
+# ==================== INFO DE CAPACIDAD ====================
+logger.info("=== Configuración de capacidad de nodos ===")
+for node, capacity in NODE_CAPACITY.items():
+    logger.info(f"  {node}: {capacity} MB")
+total_capacity = sum(NODE_CAPACITY.get(n, 0) for n in NODES.keys())
+logger.info(f"  Capacidad total del sistema: {total_capacity} MB")
+logger.info(f"  Capacidad útil (con réplicas): ~{total_capacity // 2} MB")

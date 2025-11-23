@@ -20,7 +20,8 @@ class NetworkManager:
         self.file_manager = file_manager
         self.operation_log = operation_log
         self.sync_manager = sync_manager
-        self.pending_operations = None  # Se establecerá después
+        self.pending_operations = None
+        self.block_manager = None  # NUEVO: Referencia al block manager
         
         # Estado de los nodos
         self.node_status = {node: {"alive": True, "last_seen": time.time()} 
@@ -53,6 +54,10 @@ class NetworkManager:
     def set_pending_operations(self, pending_operations):
         self.pending_operations = pending_operations
     
+    def set_block_manager(self, block_manager):
+        """NUEVO: Establece el block manager"""
+        self.block_manager = block_manager
+    
     def start(self):
         """Inicia los threads de red"""
         logger.info("Iniciando threads de red...")
@@ -79,12 +84,11 @@ class NetworkManager:
                     success = True
                     break
                 except OSError as e:
-                    if e.errno == 48:  # Address already in use
+                    if e.errno == 48 or e.errno == 10048:  # Address already in use (Unix/Windows)
                         logger.warning(f"Puerto {current_port} en uso. Intentando con {current_port+1}")
                         current_port += 1
                         if attempt == max_attempts - 1:
                             raise
-                        # Crear un nuevo socket para el siguiente intento
                         self.server_socket.close()
                         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -95,7 +99,7 @@ class NetworkManager:
                 logger.error(f"No se pudo iniciar el servidor después de {max_attempts} intentos")
                 return
             
-            self.port = current_port  # Actualizar el puerto si cambió
+            self.port = current_port
             logger.info(f"Servidor iniciado en el puerto {self.port}")
             
             while self.running:
@@ -137,7 +141,7 @@ class NetworkManager:
             logger.debug(f"Conectando a {node} ({ip}:{port})")
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            client_socket.settimeout(5)  # Timeout de 5 segundos
+            client_socket.settimeout(10)  # Timeout aumentado para bloques grandes
             client_socket.connect((ip, port))
             
             # Serializar el mensaje
@@ -151,11 +155,25 @@ class NetworkManager:
             client_socket.sendall(message_data)
             
             # Recibir respuesta
-            response_length = struct.unpack('!I', client_socket.recv(4))[0]
-            response_data = client_socket.recv(response_length)
+            response_length_data = client_socket.recv(4)
+            if not response_length_data:
+                return None
+            response_length = struct.unpack('!I', response_length_data)[0]
+            
+            # Recibir respuesta completa
+            chunks = []
+            bytes_received = 0
+            while bytes_received < response_length:
+                chunk = client_socket.recv(min(response_length - bytes_received, 65536))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                bytes_received += len(chunk)
+            
+            response_data = b''.join(chunks)
             response = json.loads(response_data.decode('utf-8'))
             
-            logger.debug(f"Respuesta recibida de {node}: {response}")
+            logger.debug(f"Respuesta recibida de {node}")
             
             # Actualizar estado del nodo
             with self.status_lock:
@@ -201,7 +219,7 @@ class NetworkManager:
             chunks = []
             bytes_received = 0
             while bytes_received < message_length:
-                chunk = client_socket.recv(min(message_length - bytes_received, 4096))
+                chunk = client_socket.recv(min(message_length - bytes_received, 65536))
                 if not chunk:
                     break
                 chunks.append(chunk)
@@ -209,11 +227,11 @@ class NetworkManager:
             
             message_data = b''.join(chunks)
             message = json.loads(message_data.decode('utf-8'))
-            logger.debug(f"Mensaje recibido de {address}: {message}")
+            logger.debug(f"Mensaje recibido de {address}: tipo={message.get('type')}")
             
             # Procesar mensaje
             response = self._process_message(message)
-            logger.debug(f"Enviando respuesta a {address}: {response}")
+            logger.debug(f"Enviando respuesta a {address}")
             
             # Enviar respuesta
             response_data = json.dumps(response).encode('utf-8')
@@ -238,7 +256,8 @@ class NetworkManager:
             with self.status_lock:
                 self.node_status[source_node]["alive"] = True
                 self.node_status[source_node]["last_seen"] = time.time()
-                logger.debug(f"Estado actualizado para nodo {source_node}")
+        
+        # ==================== HANDLERS EXISTENTES ====================
         
         if message_type == "heartbeat":
             return {"status": "ok"}
@@ -249,18 +268,14 @@ class NetworkManager:
             
             logger.info(f"Recibiendo archivo {filename} de {source_node}")
             if self.file_manager.save_file(filename, file_data):
-                # Registrar operación en el log
                 self.operation_log.add_operation(
                     "transfer_file",
                     source_node,
                     target_node=self.node_name,
                     filename=filename
                 )
-                logger.info(f"Archivo {filename} guardado exitosamente")
-                
                 return {"status": "ok"}
             else:
-                logger.error(f"Error al guardar archivo {filename}")
                 return {"status": "error", "message": "Error al guardar archivo"}
             
         elif message_type == "transfer_folder":
@@ -269,31 +284,23 @@ class NetworkManager:
 
             logger.info(f"Recibiendo carpeta {folder_name} de {source_node}")
             if self.file_manager.save_folder(folder_data):
-                # Registrar operación en el log
                 self.operation_log.add_operation(
                     "transfer_folder",
                     source_node,
                     target_node=self.node_name,
                     filename=folder_name
                 )
-                logger.info(f"Carpeta {folder_name} guardada exitosamente")
-                
                 return {"status": "ok"}
             else:
-                logger.error(f"Error al crear carpeta {folder_name}")
                 return {"status": "error", "message": "Error al crear archivo"}
         
         elif message_type == "view_file":
             filename = message.get("filename")
-            
-            logger.info(f"Recibiendo solicitud para ver archivo {filename} de {source_node}")
             file_type, content, error_or_mime = self.file_manager.get_file_content_for_view(filename)
             
             if error_or_mime and file_type is None:
-                logger.error(f"Error al obtener contenido del archivo {filename}: {error_or_mime}")
                 return {"status": "error", "message": error_or_mime}
             
-            logger.info(f"Enviando contenido del archivo {filename} a {source_node}")
             return {
                 "status": "ok",
                 "file_type": file_type,
@@ -304,18 +311,100 @@ class NetworkManager:
         
         elif message_type == "get_pending_operations":
             pending_operations = self.pending_operations.get_pending_operations(source_node)
-            logger.info(f"Enviando operaciones pendientes a {source_node}")
             return {"status": "ok", "pending_operations": pending_operations}
         
         elif message_type == "get_all_pendings":
             pending_operations = self.pending_operations.get_all_pendings()
-            logger.info(f"Enviando operaciones pendientes a {source_node}")
             return {"status": "ok", "pending_operations": pending_operations}
         
         elif message_type == "list_files":
             files = self.file_manager.list_files(None if "folder_name" not in message else message.get("folder_name"))
-            logger.debug(f"Enviando lista de {len(files)} archivos a {source_node}")
             return {"status": "ok", "files": files}
+        
+        # ==================== NUEVOS HANDLERS PARA BLOQUES ====================
+        
+        elif message_type == "store_block":
+            """Almacena un bloque recibido de otro nodo"""
+            if not self.block_manager:
+                return {"status": "error", "message": "Block manager no disponible"}
+            
+            block_id = message.get("block_id")
+            block_data = message.get("block_data")
+            is_replica = message.get("is_replica", False)
+            
+            logger.info(f"Recibiendo bloque {block_id} (replica={is_replica}) de {source_node}")
+            
+            if self.block_manager.save_block_locally(block_id, block_data, is_replica):
+                return {"status": "ok"}
+            else:
+                return {"status": "error", "message": "Error al guardar bloque"}
+        
+        elif message_type == "get_block":
+            """Envía un bloque solicitado por otro nodo"""
+            if not self.block_manager:
+                return {"status": "error", "message": "Block manager no disponible"}
+            
+            block_id = message.get("block_id")
+            logger.info(f"Nodo {source_node} solicita bloque {block_id}")
+            
+            block_data = self.block_manager.get_block_locally(block_id)
+            if block_data:
+                return {"status": "ok", "block_data": block_data}
+            else:
+                return {"status": "error", "message": "Bloque no encontrado"}
+        
+        elif message_type == "delete_block":
+            """Elimina un bloque local"""
+            if not self.block_manager:
+                return {"status": "error", "message": "Block manager no disponible"}
+            
+            block_id = message.get("block_id")
+            logger.info(f"Eliminando bloque {block_id} por solicitud de {source_node}")
+            
+            if self.block_manager.delete_block_locally(block_id):
+                return {"status": "ok"}
+            else:
+                return {"status": "error", "message": "Error al eliminar bloque"}
+        
+        elif message_type == "get_block_table":
+            """Envía la tabla de bloques para sincronización"""
+            if not self.block_manager:
+                return {"status": "error", "message": "Block manager no disponible"}
+            
+            return {
+                "status": "ok",
+                "block_table": self.block_manager.get_block_table(),
+                "file_index": self.block_manager.get_file_index()
+            }
+        
+        elif message_type == "sync_block_table":
+            """Recibe y sincroniza tabla de bloques de otro nodo"""
+            if not self.block_manager:
+                return {"status": "error", "message": "Block manager no disponible"}
+            
+            remote_table = message.get("block_table", {})
+            remote_index = message.get("file_index", {})
+            
+            self.block_manager.sync_block_table(remote_table)
+            self.block_manager.sync_file_index(remote_index)
+            
+            return {"status": "ok"}
+        
+        elif message_type == "get_distributed_files":
+            """Retorna lista de archivos distribuidos"""
+            if not self.block_manager:
+                return {"status": "error", "message": "Block manager no disponible"}
+            
+            files = self.block_manager.get_all_files()
+            return {"status": "ok", "files": files}
+        
+        elif message_type == "get_system_stats":
+            """Retorna estadísticas del sistema"""
+            if not self.block_manager:
+                return {"status": "error", "message": "Block manager no disponible"}
+            
+            stats = self.block_manager.get_system_stats()
+            return {"status": "ok", "stats": stats}
         
         else:
             logger.warning(f"Tipo de mensaje desconocido: {message_type}")
@@ -366,12 +455,10 @@ class NetworkManager:
             "timestamp": timestamp
         }
         
-        logger.info(f"Enviando archivo {filename} a {target_node}")
         success = self._send_message(target_node, message)
         
         if success:
             logger.info(f"Archivo {filename} enviado exitosamente a {target_node}")
-            # Guardar operación en el log
             self.operation_log.add_operation(
                 "transfer_file",
                 self.node_name,
@@ -394,31 +481,22 @@ class NetworkManager:
         logger.info(f"Preparando envío de carpeta {folder_name} a {target_node}")
         
         if folder_data is None:
-            logger.info(f"Obteniendo datos de la carpeta {folder_name}")
             folder_data = self.file_manager.get_folder_data(folder_name)
             if folder_data is None:
-                logger.error(f"No se pudo obtener datos de la carpeta {folder_name}")
                 return False
-            logger.info(f"Datos de la carpeta {folder_name} obtenidos correctamente ({len(folder_data['files'])} archivos)")
         
-        timestamp = time.time()
         message = {
             "type": "transfer_folder",
             "source_node": self.node_name,
             "folder_name": folder_name,
             "folder_data": folder_data,
-            "timestamp": timestamp
+            "timestamp": time.time()
         }
         
-        logger.info(f"Enviando carpeta {folder_name} a {target_node}")
         response = self._send_message(target_node, message)
-        print(response)
         success = response and response.get("status") == "ok"
-        print(success)
         
         if success:
-            logger.info(f"Carpeta {folder_name} enviada exitosamente a {target_node}")
-            # Guardar operación en el log
             self.operation_log.add_operation(
                 "transfer_folder",
                 self.node_name,
@@ -426,7 +504,6 @@ class NetworkManager:
                 filename=folder_name
             )
         else:
-            logger.error(f"Error al enviar carpeta {folder_name} a {target_node}. Respuesta: {response}")
             self.pending_operations.add_operation(
                 "transfer_folder",
                 self.node_name,
@@ -440,25 +517,17 @@ class NetworkManager:
         """Elimina un archivo localmente y notifica a otros nodos"""
         logger.info(f"Iniciando eliminación del archivo {filename}")
         
-        # Primero eliminar localmente
         if not self.file_manager.delete_file(filename):
-            logger.error(f"Error al eliminar archivo {filename} localmente")
-            #return False
+            pass
         
-        # Registrar operación en el log
         self.operation_log.add_operation(
             "delete",
             self.node_name,
             filename=filename
         )
-        logger.info(f"Archivo {filename} eliminado exitosamente")
-        
-        # Notificar a otros nodos
-        timestamp = time.time()
         
         for node in self.nodes:
             if node != self.node_name:
-                logger.info(f"Propagando eliminación de {filename} a {node}")
                 self.pending_operations.add_operation(
                     "delete",
                     node,
@@ -471,7 +540,7 @@ class NetworkManager:
         """Obtiene el estado de conexión de todos los nodos"""
         with self.status_lock:
             status = {node: info["alive"] for node, info in self.node_status.items()}
-            status[self.node_name] = True  # Este nodo siempre está activo
+            status[self.node_name] = True
             return status
     
     def stop(self):
@@ -479,7 +548,6 @@ class NetworkManager:
         logger.info("Deteniendo NetworkManager...")
         self.running = False
         
-        # Limpiar todas las conexiones activas
         for sock in list(self.active_connections):
             try:
                 if sock in self.active_connections:

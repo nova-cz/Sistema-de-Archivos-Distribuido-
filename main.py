@@ -1,10 +1,12 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_file
 import os
 import threading
 import logging
 import time
+import tempfile
+import io
 from node import Node
-from config import WEB_PORT, NODES
+from config import WEB_PORT, NODES, NODE_CAPACITY
 
 # Configurar logging
 logging.basicConfig(
@@ -18,21 +20,21 @@ logging.basicConfig(
 
 app = Flask(__name__)
 node = Node()
-    
+
+# ==================== RUTAS EXISTENTES ====================
+
 @app.route('/')
 def index():
     """Página principal de la interfaz web"""
-    return render_template('index.html', node_name=node.node_name, nodes=NODES)
+    return render_template('index.html', node_name=node.node_name, nodes=NODES, node_capacity=NODE_CAPACITY)
 
 @app.route('/api/node_files/<node_name>', methods=['GET'])
 def get_node_files(node_name):
     """API para obtener archivos de un nodo específico"""
     if node_name == node.node_name:
-        # Si es el nodo local, usar la función existente
         files = node.list_files()
         return jsonify(files)
     else:
-        # Si es otro nodo, solicitar los archivos a través de la red
         files = node.get_remote_files(node_name)
         if files is None:
             return jsonify([])
@@ -56,7 +58,6 @@ def view_file():
     
     try:
         if source_node == node.node_name:
-            # Archivo local
             file_type, content, error_or_mime = node.file_manager.get_file_content_for_view(filename)
             
             if error_or_mime and file_type is None:
@@ -70,7 +71,6 @@ def view_file():
                 "filename": filename
             })
         else:
-            # Archivo remoto - necesitamos obtenerlo primero
             message = {
                 "type": "view_file",
                 "source_node": node.node_name,
@@ -96,7 +96,6 @@ def transfer_file():
     target_node = data.get('target_node')
     source_node = data.get('source_node')
     is_dir = data.get('is_dir')
-    print("IS DIIIIIIIIIIR-------------", data.get('is_dir'))
     
     if not filename or not target_node:
         return jsonify({"status": "error", "message": "Faltan parámetros"})
@@ -128,15 +127,147 @@ def delete_file():
 @app.route('/api/status', methods=['GET'])
 def get_status():
     """API para obtener el estado de los nodos"""
-    # Siempre reportar que todos los nodos están conectados
-    status = {node: True for node in NODES}
+    status = node.get_node_status()
     return jsonify(status)
+
+# ==================== NUEVAS RUTAS PARA SISTEMA DE BLOQUES ====================
+
+@app.route('/api/upload', methods=['POST'])
+def upload_file():
+    """
+    API para subir un archivo al sistema distribuido.
+    
+    El archivo se divide en bloques de 1 MB, se distribuye entre nodos
+    y se replica automáticamente.
+    """
+    if 'file' not in request.files:
+        return jsonify({"status": "error", "message": "No se envió ningún archivo"})
+    
+    file = request.files['file']
+    
+    if file.filename == '':
+        return jsonify({"status": "error", "message": "Nombre de archivo vacío"})
+    
+    try:
+        # Guardar archivo temporalmente
+        temp_dir = tempfile.gettempdir()
+        temp_path = os.path.join(temp_dir, file.filename)
+        file.save(temp_path)
+        
+        # Subir al sistema distribuido
+        result = node.upload_file(temp_path, file.filename)
+        
+        # Limpiar archivo temporal
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Error al subir archivo: {str(e)}"})
+
+@app.route('/api/download/<file_id>', methods=['GET'])
+def download_file(file_id):
+    """
+    API para descargar un archivo del sistema distribuido.
+    
+    Reconstruye el archivo desde sus bloques distribuidos.
+    """
+    try:
+        file_data, original_filename = node.download_file(file_id)
+        
+        if file_data is None:
+            return jsonify({"status": "error", "message": "No se pudo reconstruir el archivo"})
+        
+        # Crear archivo en memoria para enviar
+        file_stream = io.BytesIO(file_data)
+        file_stream.seek(0)
+        
+        return send_file(
+            file_stream,
+            as_attachment=True,
+            download_name=original_filename,
+            mimetype='application/octet-stream'
+        )
+        
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Error al descargar: {str(e)}"})
+
+@app.route('/api/delete_distributed/<file_id>', methods=['DELETE'])
+def delete_distributed_file(file_id):
+    """
+    API para eliminar un archivo distribuido y todos sus bloques.
+    """
+    try:
+        success = node.delete_distributed_file(file_id)
+        
+        if success:
+            return jsonify({"status": "ok", "message": "Archivo eliminado correctamente"})
+        else:
+            return jsonify({"status": "error", "message": "Error al eliminar archivo"})
+            
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Error: {str(e)}"})
+
+@app.route('/api/distributed_files', methods=['GET'])
+def get_distributed_files():
+    """
+    API para obtener la lista de archivos distribuidos en el sistema.
+    """
+    try:
+        files = node.get_distributed_files()
+        return jsonify({"status": "ok", "files": files})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/api/file_attributes/<file_id>', methods=['GET'])
+def get_file_attributes(file_id):
+    """
+    API para obtener los atributos detallados de un archivo.
+    
+    Muestra en qué nodos está cada bloque.
+    """
+    try:
+        attributes = node.get_file_attributes(file_id)
+        
+        if attributes:
+            return jsonify({"status": "ok", "attributes": attributes})
+        else:
+            return jsonify({"status": "error", "message": "Archivo no encontrado"})
+            
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/api/block_table', methods=['GET'])
+def get_block_table():
+    """
+    API para obtener la tabla de bloques completa.
+    """
+    try:
+        block_table = node.get_block_table()
+        return jsonify({"status": "ok", "block_table": block_table})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/api/system_stats', methods=['GET'])
+def get_system_stats():
+    """
+    API para obtener estadísticas del sistema.
+    
+    Incluye: archivos totales, bloques, uso por nodo, espacio libre.
+    """
+    try:
+        stats = node.get_system_stats()
+        return jsonify({"status": "ok", "stats": stats})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+# ==================== INICIO DE LA APLICACIÓN ====================
 
 def start_node():
     node.start()
 
 if __name__ == "__main__":
-
     # Configurar carpeta static para CSS
     app.static_folder = 'static'
     
@@ -157,8 +288,17 @@ if __name__ == "__main__":
     node_thread.daemon = True
     node_thread.start()
     
-    print(f"Iniciando nodo {node.node_name} en http://0.0.0.0:{WEB_PORT}")
-    print("Presiona CTRL+C para detener la app")
+    print(f"\n{'='*60}")
+    print(f"  SISTEMA DE ARCHIVOS DISTRIBUIDO TOLERANTE A FALLAS")
+    print(f"{'='*60}")
+    print(f"  Nodo: {node.node_name}")
+    print(f"  URL: http://0.0.0.0:{WEB_PORT}")
+    print(f"{'='*60}")
+    print(f"  Capacidad de este nodo: {NODE_CAPACITY.get(node.node_name, 50)} MB")
+    print(f"  Tamaño de bloque: 1 MB")
+    print(f"{'='*60}")
+    print("  Presiona CTRL+C para detener la aplicación")
+    print(f"{'='*60}\n")
     
     # Iniciar la aplicación web
     app.run(host='0.0.0.0', port=WEB_PORT, debug=False)
