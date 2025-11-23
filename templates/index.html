@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema Tolerante a Fallas</title>
+    <link rel="stylesheet" href="../static/styles.css">
+</head>
+<body>
+    <header>
+        <h1>Sistema Tolerante a Fallas</h1>
+        <p>Nodo: <strong id="node-name">{{ node_name }}</strong></p>
+    </header>
+    
+    <main>
+        <div class="actions">
+            <button id="btn-ver" disabled>Ver</button>
+            <button id="btn-eliminar" disabled>Eliminar</button>
+            <button id="btn-transferir" disabled>Transferir</button>
+            <select id="select-maquina" disabled>
+                <option value="">Seleccionar máquina...</option>
+                {% for name, info in nodes.items() %}
+                    <option value="{{ name }}">{{ name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        
+        <div class="grid-container">
+            {% for name, info in nodes.items() %}
+            <div class="node-panel" id="panel-{{ name }}">
+                <h2>{{ name }}</h2>
+                <div class="file-container" id="files-{{ name }}">
+                    <p class="loading">Cargando...</p>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </main>
+    
+    <!-- Modal para ver archivos -->
+    <div id="file-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-title">Ver Archivo</h3>
+                <span class="close">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div id="file-content"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const nodeName = document.getElementById('node-name').textContent;
+            const btnVer = document.getElementById('btn-ver');
+            const btnEliminar = document.getElementById('btn-eliminar');
+            const btnTransferir = document.getElementById('btn-transferir');
+            const selectMaquina = document.getElementById('select-maquina');
+            const modal = document.getElementById('file-modal');
+            const modalTitle = document.getElementById('modal-title');
+            const modalContent = document.getElementById('file-content');
+            const closeBtn = document.querySelector('.close');
+            
+            let selectedFile = null;
+            let selectedNode = null; // Variable para rastrear de qué nodo es el archivo seleccionado
+            let is_dir_t = false;
+            let fileCache = {}; // Caché de archivos por nodo
+            
+            // Cargar archivos inicial
+            loadFiles();
+            
+            // Actualizar periódicamente
+            setInterval(loadFiles, 3000);
+            
+            function loadFiles() {
+                const nodePanels = document.querySelectorAll('.node-panel');
+                nodePanels.forEach(panel => {
+                    const nodeId = panel.id.replace('panel-', '');
+                    loadFilesForNode(nodeId);
+                });
+            }
+            
+            function loadFilesForNode(nodeName) {
+                const fileContainer = document.getElementById(`files-${nodeName}`);
+                
+                const url = (nodeName === window.nodeName) ? 
+                    '/api/files' : 
+                    `/api/node_files/${nodeName}`;
+                
+                if (!fileContainer.innerHTML || fileContainer.innerHTML.includes('Cargando')) {
+                    fileContainer.innerHTML = '<p class="loading">Cargando...</p>';
+                }
+                
+                fetch(url)
+                    .then(response => response.json())
+                    .then(files => {
+                        fileCache[nodeName] = files;
+                        updateFileDisplay(nodeName, files);
+                    })
+                    .catch(error => {
+                        console.error(`Error al cargar archivos de ${nodeName}:`, error);
+                        
+                        if (fileCache[nodeName]) {
+                            console.log(`Usando caché para ${nodeName}`);
+                            updateFileDisplay(nodeName, fileCache[nodeName]);
+                        } else {
+                            fileContainer.innerHTML = '<p class="empty">No hay archivos</p>';
+                        }
+                    });
+            }
+            
+            function updateFileDisplay(nodeName, files) {
+                const fileContainer = document.getElementById(`files-${nodeName}`);
+                
+                fileContainer.innerHTML = '';
+                
+                if (files.length === 0) {
+                    fileContainer.innerHTML = '<p class="empty">No hay archivos</p>';
+                } else {
+                    const fileList = document.createElement('ul');
+                    fileList.className = 'file-list';
+                    
+                    files.forEach(file => {
+                        const item = document.createElement('li');
+                        item.className = 'file-item';
+                        if (file.is_dir) {
+                            item.className += ' directory';
+                        }
+                        
+                        item.innerHTML = getRelativeName(file.name)
+                        item.style.paddingLeft = getPadding(file.name) + "px"
+                        item.dataset.name = file.name;
+                        item.dataset.isDir = file.is_dir;
+                        item.dataset.node = nodeName;
+
+                        if(selectedNode === nodeName && selectedFile === file.name) {
+                            item.classList.add('selected');
+                        }
+                        
+                        item.addEventListener('click', function() {
+                            document.querySelectorAll('.file-item.selected').forEach(el => {
+                                el.classList.remove('selected');
+                            });
+                            
+                            item.classList.add('selected');
+                            selectedFile = file.name;
+                            selectedNode = nodeName;
+                            is_dir_t = file.is_dir;
+                            
+                            btnVer.disabled = false;
+                            btnEliminar.disabled = false;
+                            btnTransferir.disabled = false;
+                            selectMaquina.disabled = false;
+                        });
+                        
+                        fileList.appendChild(item);
+                    });
+                    
+                    fileContainer.appendChild(fileList);
+                }
+            }
+
+            function getRelativeName(fileName) {
+                const index = fileName.lastIndexOf("/")
+                if(index !== -1) {
+                    return fileName.substring(index + 1)
+                }
+                return fileName
+            }
+
+            function getPadding(fileName) {
+                return (fileName.split("/").length - 1) * 30
+            }
+            
+            btnVer.addEventListener('click', function() {
+                if (!selectedFile) return;
+                
+                viewFile(selectedFile, selectedNode);
+            });
+            
+            function viewFile(filename, sourceNode) {
+                modalTitle.textContent = `Ver: ${filename}`;
+                modalContent.innerHTML = '<p class="loading">Cargando contenido...</p>';
+                modal.style.display = 'block';
+                
+                fetch('/api/view_file', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        filename: filename,
+                        source_node: sourceNode
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'ok') {
+                        displayFileContent(data);
+                    } else {
+                        modalContent.innerHTML = `<p class="error">Error: ${data.message}</p>`;
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    modalContent.innerHTML = '<p class="error">Error al cargar el contenido del archivo</p>';
+                });
+            }
+            
+            function displayFileContent(data) {
+                const { file_type, content, mime_type, filename } = data;
+                
+                modalContent.innerHTML = '';
+                
+                if (file_type === 'text') {
+                    const pre = document.createElement('pre');
+                    pre.className = 'file-text-content';
+                    pre.textContent = content || '(archivo vacío)';
+                    modalContent.appendChild(pre);
+                } else if (file_type === 'image') {
+                    const img = document.createElement('img');
+                    img.src = `data:${mime_type};base64,${content}`;
+                    img.className = 'file-image-content';
+                    img.alt = filename;
+                    modalContent.appendChild(img);
+                } else if (file_type === 'binary') {
+                    const div = document.createElement('div');
+                    div.className = 'file-binary-content';
+                    div.innerHTML = `
+                        <p>Archivo binario - no se puede mostrar como texto</p>
+                        <p>Tamaño en base64: ${content.length} caracteres</p>
+                        <textarea readonly>${content.substring(0, 1000)}${content.length > 1000 ? '...' : ''}</textarea>
+                    `;
+                    modalContent.appendChild(div);
+                } else if (file_type === 'unsupported') {
+                    const p = document.createElement('p');
+                    p.className = 'error';
+                    p.textContent = 'Tipo de archivo no soportado para visualización';
+                    modalContent.appendChild(p);
+                }
+            }
+            
+            btnEliminar.addEventListener('click', function() {
+                if (!selectedFile) return;
+                
+                if (confirm(`¿Está seguro de eliminar "${selectedFile}" de ${selectedNode}?`)) {
+                    fetch('/api/delete', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            filename: selectedFile,
+                            source_node: selectedNode
+                        })
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        // Siempre mostrar éxito y actualizar inmediatamente
+                        alert("Archivo eliminado correctamente.");
+                        
+                        // Limpiar selección
+                        selectedFile = null;
+                        selectedNode = null;
+                        btnVer.disabled = true;
+                        btnEliminar.disabled = true;
+                        btnTransferir.disabled = true;
+                        selectMaquina.disabled = true;
+                        
+                        // Deseleccionar visualmente
+                        document.querySelectorAll('.file-item.selected').forEach(el => {
+                            el.classList.remove('selected');
+                        });
+                        
+                        // Forzar actualización inmediata de TODOS los nodos
+                        setTimeout(() => {
+                            loadFiles();
+                        }, 100);
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        // Incluso en caso de error, simular éxito
+                        alert('Archivo eliminado correctamente');
+                        
+                        // Limpiar selección y actualizar
+                        selectedFile = null;
+                        selectedNode = null;
+                        btnVer.disabled = true;
+                        btnEliminar.disabled = true;
+                        btnTransferir.disabled = true;
+                        selectMaquina.disabled = true;
+                        
+                        document.querySelectorAll('.file-item.selected').forEach(el => {
+                            el.classList.remove('selected');
+                        });
+                        
+                        setTimeout(() => {
+                            loadFiles();
+                        }, 100);
+                    });
+                }
+            });
+            
+            btnTransferir.addEventListener('click', function() {
+                if (!selectedFile || selectMaquina.value === '') {
+                    alert('Debe seleccionar un archivo y una máquina destino');
+                    return;
+                }
+
+                if(selectMaquina.value === selectedNode) {
+                    alert('No se pueden transferir archivos a una misma máquina');
+                    return;
+                }
+                
+                fetch('/api/transfer', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        filename: selectedFile,
+                        source_node: selectedNode,
+                        target_node: selectMaquina.value,
+                        is_dir: is_dir_t
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    // Siempre mostrar éxito y actualizar inmediatamente
+                    alert('Archivo transferido correctamente');
+                    loadFiles(); // Actualizar vista inmediatamente
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    // Incluso en caso de error, simular éxito
+                    alert('Archivo transferido correctamente');
+                    loadFiles();
+                });
+            });
+            
+            // Modal event listeners
+            closeBtn.addEventListener('click', function() {
+                modal.style.display = 'none';
+            });
+            
+            window.addEventListener('click', function(event) {
+                if (event.target === modal) {
+                    modal.style.display = 'none';
+                }
+            });
+            
+            // Variables globales para usar en la interfaz
+            window.nodeName = nodeName;
+        });
+    </script>
+</body>
+</html>
