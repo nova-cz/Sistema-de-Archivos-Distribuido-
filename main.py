@@ -5,6 +5,7 @@ import logging
 import time
 import tempfile
 import io
+import base64
 from node import Node
 from config import WEB_PORT, NODES, NODE_CAPACITY
 
@@ -219,6 +220,78 @@ def get_distributed_files():
         return jsonify({"status": "ok", "files": files})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/api/view_distributed/<file_id>', methods=['GET'])
+def view_distributed_file(file_id):
+    """
+    API para ver el contenido de un archivo distribuido.
+    Reconstruye el archivo y lo muestra (texto o imagen).
+    """
+    try:
+        # Reconstruir el archivo desde sus bloques
+        file_data, original_filename = node.download_file(file_id)
+        
+        if file_data is None:
+            return jsonify({"status": "error", "message": "No se pudo reconstruir el archivo"})
+        
+        # Determinar el tipo de archivo por extensión
+        import os
+        file_extension = os.path.splitext(original_filename)[1].lower()
+        
+        # Tipos de archivo soportados
+        text_extensions = ['.txt', '.py', '.js', '.html', '.css', '.json', '.xml', '.md', '.yml', '.yaml', '.log']
+        image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp']
+        
+        # Archivo de texto
+        if file_extension in text_extensions or len(file_data) == 0:
+            try:
+                content = file_data.decode('utf-8')
+                return jsonify({
+                    "status": "ok",
+                    "file_type": "text",
+                    "content": content,
+                    "filename": original_filename
+                })
+            except UnicodeDecodeError:
+                # Si no se puede decodificar como texto, tratarlo como binario
+                return jsonify({
+                    "status": "ok",
+                    "file_type": "binary",
+                    "content": base64.b64encode(file_data).decode('utf-8'),
+                    "filename": original_filename
+                })
+        
+        # Archivo de imagen
+        elif file_extension in image_extensions:
+            mime_types = {
+                '.jpg': 'image/jpeg',
+                '.jpeg': 'image/jpeg',
+                '.png': 'image/png',
+                '.gif': 'image/gif',
+                '.bmp': 'image/bmp',
+                '.svg': 'image/svg+xml',
+                '.webp': 'image/webp'
+            }
+            mime_type = mime_types.get(file_extension, 'application/octet-stream')
+            
+            return jsonify({
+                "status": "ok",
+                "file_type": "image",
+                "content": base64.b64encode(file_data).decode('utf-8'),
+                "mime_type": mime_type,
+                "filename": original_filename
+            })
+        
+        # Archivo no soportado para visualización
+        else:
+            return jsonify({
+                "status": "error",
+                "message": f"Tipo de archivo no soportado para visualización: {file_extension}",
+                "file_type": "unsupported"
+            })
+            
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Error al ver archivo: {str(e)}"})
 
 @app.route('/api/file_attributes/<file_id>', methods=['GET'])
 def get_file_attributes(file_id):

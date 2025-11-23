@@ -1,297 +1,160 @@
-/* Lógica del cliente con Animaciones GSAP */
+// Animaciones GSAP
+gsap.from("header", { duration: 0.8, y: -50, opacity: 0, ease: "power3.out" });
+gsap.from(".actions", { duration: 0.6, y: 30, opacity: 0, delay: 0.3, ease: "power3.out" });
+gsap.from(".panel", { duration: 0.6, y: 40, opacity: 0, stagger: 0.15, delay: 0.5, ease: "power3.out" });
+gsap.from(".stat-card", { duration: 0.5, scale: 0.8, opacity: 0, stagger: 0.1, delay: 0.4, ease: "back.out(1.7)" });
+
+// Animación de orbes
+gsap.to(".orb-1", { duration: 15, x: 50, y: 30, repeat: -1, yoyo: true, ease: "sine.inOut" });
+gsap.to(".orb-2", { duration: 12, x: -40, y: -20, repeat: -1, yoyo: true, ease: "sine.inOut" });
+gsap.to(".orb-3", { duration: 10, x: 30, y: 40, repeat: -1, yoyo: true, ease: "sine.inOut" });
 
 let selectedFile = null;
-let distributedFiles = [];
+let files = [];
 let nodeStatus = {};
 
-// Configuración GSAP
-gsap.config({ nullTargetWarn: false });
-
-document.addEventListener('DOMContentLoaded', function () {
-    // Animación de entrada inicial
-    initAnimations();
-
+document.addEventListener('DOMContentLoaded', () => {
     loadAll();
     setInterval(loadAll, 3000);
 
-    document.getElementById('file-input').addEventListener('change', handleFileUpload);
+    document.getElementById('file-input').addEventListener('change', uploadFile);
     document.getElementById('btn-download').addEventListener('click', downloadFile);
     document.getElementById('btn-attributes').addEventListener('click', showAttributes);
     document.getElementById('btn-delete').addEventListener('click', deleteFile);
-    document.getElementById('btn-block-table').addEventListener('click', showBlockTable);
+    document.getElementById('btn-table').addEventListener('click', showTable);
 });
 
-function initAnimations() {
-    const tl = gsap.timeline();
-
-    tl.from('header', {
-        y: -50,
-        opacity: 0,
-        duration: 1,
-        ease: 'power3.out'
-    })
-        .from('.stat-item', {
-            y: 20,
-            opacity: 0,
-            duration: 0.6,
-            stagger: 0.1,
-            ease: 'back.out(1.7)'
-        }, '-=0.5')
-        .from('.actions', {
-            scale: 0.95,
-            opacity: 0,
-            duration: 0.5
-        }, '-=0.3')
-        .from('.panel', {
-            y: 30,
-            opacity: 0,
-            duration: 0.8,
-            stagger: 0.2,
-            ease: 'power2.out'
-        }, '-=0.3');
-}
-
 function loadAll() {
-    loadDistributedFiles();
-    loadNodeStatus();
-    loadSystemStats();
-}
-
-function loadDistributedFiles() {
-    fetch('/api/distributed_files')
-        .then(r => r.json())
-        .then(data => {
-            if (data.status === 'ok') {
-                const newFiles = data.files || [];
-                // Solo renderizar si hay cambios para evitar parpadeos innecesarios
-                // (En una app real usaríamos diffing, aquí simplificamos)
-                if (JSON.stringify(newFiles) !== JSON.stringify(distributedFiles)) {
-                    distributedFiles = newFiles;
-                    renderDistributedFiles();
-                    animateValue('total-files', parseInt(document.getElementById('total-files').textContent), distributedFiles.length);
-                }
+    fetch('/api/distributed_files').then(r => r.json()).then(d => {
+        if (d.status === 'ok') { files = d.files || []; renderFiles(); document.getElementById('total-files').textContent = files.length; }
+    });
+    fetch('/api/status').then(r => r.json()).then(d => {
+        nodeStatus = d;
+        let on = 0;
+        for (let n in d) {
+            const el = document.getElementById(`status-${n}`);
+            if (el) { el.className = `status-dot ${d[n] ? 'online' : 'offline'}`; if (d[n]) on++; }
+        }
+        document.getElementById('nodes-online').textContent = on;
+    });
+    fetch('/api/system_stats').then(r => r.json()).then(d => {
+        if (d.status === 'ok') {
+            document.getElementById('total-blocks').textContent = d.stats.total_blocks || 0;
+            let total = 0;
+            for (let n in d.stats.node_usage) {
+                const u = d.stats.node_usage[n] || 0;
+                const c = d.stats.node_capacity[n] || 50;
+                const p = Math.min((u / c) * 100, 100);
+                total += u;
+                const bar = document.getElementById(`cap-${n}`);
+                const txt = document.getElementById(`cap-text-${n}`);
+                if (bar) { bar.style.width = `${p}%`; bar.className = 'capacity-fill' + (p > 80 ? ' danger' : p > 60 ? ' warning' : ''); }
+                if (txt) txt.textContent = `${u} / ${c} MB`;
             }
-        })
-        .catch(e => console.error('Error:', e));
-}
-
-function loadNodeStatus() {
-    fetch('/api/status')
-        .then(r => r.json())
-        .then(data => {
-            nodeStatus = data;
-            let online = 0;
-            for (let node in data) {
-                const el = document.getElementById(`status-${node}`);
-                if (el) {
-                    const isOnline = data[node];
-                    const currentClass = el.className;
-                    const newClass = `node-status ${isOnline ? 'online' : 'offline'}`;
-
-                    if (currentClass !== newClass) {
-                        el.className = newClass;
-                        // Animar cambio de estado
-                        gsap.fromTo(el, { scale: 1.5 }, { scale: 1, duration: 0.5, ease: 'elastic.out(1, 0.3)' });
-                    }
-
-                    if (isOnline) online++;
-                }
-            }
-            animateValue('nodes-online', parseInt(document.getElementById('nodes-online').textContent), online);
-        })
-        .catch(e => console.error('Error:', e));
-}
-
-function loadSystemStats() {
-    fetch('/api/system_stats')
-        .then(r => r.json())
-        .then(data => {
-            if (data.status === 'ok') {
-                const stats = data.stats;
-                animateValue('total-blocks', parseInt(document.getElementById('total-blocks').textContent), stats.total_blocks || 0);
-
-                let totalUsed = 0;
-                for (let node in stats.node_usage) {
-                    const used = stats.node_usage[node] || 0;
-                    const capacity = stats.node_capacity[node] || 50;
-                    const percent = Math.min((used / capacity) * 100, 100);
-                    totalUsed += used;
-
-                    const capEl = document.getElementById(`capacity-${node}`);
-                    const txtEl = document.getElementById(`capacity-text-${node}`);
-
-                    if (capEl) {
-                        // Animar barra de capacidad
-                        gsap.to(capEl, { width: `${percent}%`, duration: 1, ease: 'power2.out' });
-
-                        capEl.className = 'capacity-fill';
-                        if (percent > 80) capEl.classList.add('danger');
-                        else if (percent > 60) capEl.classList.add('warning');
-                    }
-                    if (txtEl) txtEl.textContent = `${used} / ${capacity} MB`;
-                }
-                document.getElementById('total-space').textContent = `${totalUsed} MB`;
-            }
-        })
-        .catch(e => console.error('Error:', e));
-}
-
-function animateValue(id, start, end) {
-    if (start === end) return;
-    const obj = { val: start };
-    gsap.to(obj, {
-        val: end,
-        duration: 1,
-        ease: 'power1.out',
-        onUpdate: function () {
-            document.getElementById(id).textContent = Math.floor(obj.val);
+            document.getElementById('total-space').textContent = total;
         }
     });
 }
 
-function renderDistributedFiles() {
-    const container = document.getElementById('distributed-files');
-
-    if (distributedFiles.length === 0) {
-        container.innerHTML = '<li class="empty-message">No hay archivos. ¡Sube uno con el botón verde!</li>';
+function renderFiles() {
+    const list = document.getElementById('file-list');
+    if (files.length === 0) {
+        list.innerHTML = '<li class="empty-state"><div class="empty-icon">📂</div><div>No hay archivos</div><div style="font-size:0.9em;margin-top:8px;">Sube uno con el botón verde</div></li>';
         return;
     }
-
-    container.innerHTML = distributedFiles.map(file => `
-        <li class="file-item ${selectedFile && selectedFile.file_id === file.file_id ? 'selected' : ''}"
-            onclick="selectFile('${file.file_id}')">
-            <div class="file-name">
-                <span class="file-icon">📄</span>
-                <span>${file.filename}</span>
+    list.innerHTML = files.map(f => `
+        <li class="file-item ${selectedFile?.file_id === f.file_id ? 'selected' : ''}" onclick="selectFile('${f.file_id}')">
+            <div class="file-info">
+                <div class="file-icon">📄</div>
+                <div>
+                    <div class="file-name">${f.filename}</div>
+                    <div class="file-meta">${formatSize(f.size)} • ${f.total_blocks} bloque(s)</div>
+                </div>
             </div>
-            <span class="file-size">${formatSize(file.size)} • ${file.total_blocks} bloque(s)</span>
         </li>
     `).join('');
 
-    // Animar entrada de items
-    gsap.from('.file-item', {
-        y: 10,
-        opacity: 0,
-        duration: 0.4,
-        stagger: 0.05,
-        ease: 'power1.out',
-        clearProps: 'all' // Limpiar propiedades para no interferir con hover CSS
-    });
+    // Animar nuevos items
+    gsap.from(".file-item", { duration: 0.3, x: -20, opacity: 0, stagger: 0.05 });
 }
 
-function selectFile(fileId) {
-    selectedFile = distributedFiles.find(f => f.file_id === fileId);
-
-    // Actualizar clases visuales sin re-renderizar todo para mantener animaciones suaves
-    document.querySelectorAll('.file-item').forEach(el => {
-        el.classList.remove('selected');
-        if (el.getAttribute('onclick').includes(fileId)) {
-            el.classList.add('selected');
-            // Pequeño pulso al seleccionar
-            gsap.fromTo(el, { scale: 0.98 }, { scale: 1, duration: 0.3, ease: 'back.out(2)' });
-        }
-    });
-
-    const hasSelection = selectedFile !== null;
-    const buttons = ['btn-download', 'btn-attributes', 'btn-delete'];
-
-    buttons.forEach(btnId => {
-        const btn = document.getElementById(btnId);
-        btn.disabled = !hasSelection;
-        if (hasSelection) {
-            gsap.fromTo(btn, { scale: 0.9 }, { scale: 1, duration: 0.4, ease: 'elastic.out(1, 0.5)' });
-        }
-    });
+function selectFile(id) {
+    selectedFile = files.find(f => f.file_id === id);
+    renderFiles();
+    const has = !!selectedFile;
+    document.getElementById('btn-download').disabled = !has;
+    document.getElementById('btn-attributes').disabled = !has;
+    document.getElementById('btn-delete').disabled = !has;
 }
 
-function handleFileUpload(event) {
-    const file = event.target.files[0];
+function uploadFile(e) {
+    const file = e.target.files[0];
     if (!file) return;
 
-    const formData = new FormData();
-    formData.append('file', file);
+    const form = new FormData();
+    form.append('file', file);
 
-    const progContainer = document.getElementById('progress-container');
-    const progFill = document.getElementById('progress-fill');
-    const progText = document.getElementById('progress-text');
+    const overlay = document.getElementById('progress-overlay');
+    const fill = document.getElementById('progress-fill');
+    const text = document.getElementById('progress-text');
 
-    // Mostrar contenedor con animación
-    progContainer.style.display = 'block';
-    gsap.fromTo(progContainer, { height: 0, opacity: 0 }, { height: 'auto', opacity: 1, duration: 0.5 });
+    overlay.style.display = 'flex';
+    gsap.fromTo(overlay, { opacity: 0 }, { opacity: 1, duration: 0.3 });
 
-    progFill.style.width = '0%';
-    progText.textContent = `Subiendo y distribuyendo ${file.name}...`;
+    let prog = 0;
+    const int = setInterval(() => { prog += Math.random() * 15; if (prog > 90) prog = 90; fill.style.width = `${prog}%`; }, 200);
 
-    let progress = 0;
-    const interval = setInterval(() => {
-        progress += Math.random() * 15;
-        if (progress > 90) progress = 90;
-        gsap.to(progFill, { width: `${progress}%`, duration: 0.2 });
-    }, 200);
-
-    fetch('/api/upload', { method: 'POST', body: formData })
+    fetch('/api/upload', { method: 'POST', body: form })
         .then(r => r.json())
-        .then(data => {
-            clearInterval(interval);
-            gsap.to(progFill, { width: '100%', duration: 0.3 });
-
+        .then(d => {
+            clearInterval(int);
+            fill.style.width = '100%';
             setTimeout(() => {
-                // Ocultar con animación
-                gsap.to(progContainer, {
-                    height: 0,
-                    opacity: 0,
-                    duration: 0.5,
-                    onComplete: () => { progContainer.style.display = 'none'; }
-                });
-
-                if (data.status === 'ok') {
-                    showToast(`✅ "${data.filename}" subido (${data.total_blocks} bloques distribuidos)`, 'success');
+                gsap.to(overlay, { opacity: 0, duration: 0.3, onComplete: () => overlay.style.display = 'none' });
+                if (d.status === 'ok') {
+                    toast(`✅ "${d.filename}" subido (${d.total_blocks} bloques)`, 'success');
                     loadAll();
                 } else {
-                    showToast(`❌ Error: ${data.message}`, 'error');
+                    toast(`❌ Error: ${d.message}`, 'error');
                 }
             }, 500);
         })
         .catch(e => {
-            clearInterval(interval);
-            gsap.to(progContainer, { height: 0, opacity: 0, duration: 0.5 });
-            showToast('❌ Error al subir archivo', 'error');
+            clearInterval(int);
+            overlay.style.display = 'none';
+            toast('❌ Error al subir', 'error');
         });
 
-    event.target.value = '';
+    e.target.value = '';
 }
 
 function downloadFile() {
     if (!selectedFile) return;
-    showToast(`📥 Reconstruyendo y descargando ${selectedFile.filename}...`, 'success');
-
-    const link = document.createElement('a');
-    link.href = `/api/download/${selectedFile.file_id}`;
-    link.download = selectedFile.filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    toast(`📥 Descargando ${selectedFile.filename}...`, 'info');
+    const a = document.createElement('a');
+    a.href = `/api/download/${selectedFile.file_id}`;
+    a.download = selectedFile.filename;
+    a.click();
 }
 
 function deleteFile() {
     if (!selectedFile) return;
-    if (!confirm(`¿Eliminar "${selectedFile.filename}" y todos sus bloques de todos los nodos?`)) return;
+    if (!confirm(`¿Eliminar "${selectedFile.filename}"?`)) return;
 
     fetch(`/api/delete_distributed/${selectedFile.file_id}`, { method: 'DELETE' })
         .then(r => r.json())
-        .then(data => {
-            if (data.status === 'ok') {
-                showToast('✅ Archivo eliminado de todos los nodos', 'success');
+        .then(d => {
+            if (d.status === 'ok') {
+                toast('✅ Archivo eliminado', 'success');
                 selectedFile = null;
                 document.getElementById('btn-download').disabled = true;
                 document.getElementById('btn-attributes').disabled = true;
                 document.getElementById('btn-delete').disabled = true;
                 loadAll();
             } else {
-                showToast(`❌ Error: ${data.message}`, 'error');
+                toast(`❌ ${d.message}`, 'error');
             }
-        })
-        .catch(e => showToast('❌ Error al eliminar', 'error'));
+        });
 }
 
 function showAttributes() {
@@ -299,114 +162,133 @@ function showAttributes() {
 
     fetch(`/api/file_attributes/${selectedFile.file_id}`)
         .then(r => r.json())
-        .then(data => {
-            if (data.status === 'ok') {
-                const attrs = data.attributes;
-
-                document.getElementById('attributes-grid').innerHTML = `
-                    <div class="attr-item">
+        .then(d => {
+            if (d.status === 'ok') {
+                const a = d.attributes;
+                document.getElementById('attr-grid').innerHTML = `
+                    <div class="attr-card">
                         <div class="attr-label">Nombre</div>
-                        <div class="attr-value">${attrs.original_filename}</div>
+                        <div class="attr-value">${a.original_filename}</div>
                     </div>
-                    <div class="attr-item">
-                        <div class="attr-label">ID</div>
-                        <div class="attr-value" style="font-size:0.9em;">${selectedFile.file_id}</div>
+                    <div class="attr-card">
+                        <div class="attr-label">Tamaño</div>
+                        <div class="attr-value">${formatSize(a.size)}</div>
                     </div>
-                    <div class="attr-item">
-                        <div class="attr-label">Tamaño Total</div>
-                        <div class="attr-value">${formatSize(attrs.size)}</div>
-                    </div>
-                    <div class="attr-item">
+                    <div class="attr-card">
                         <div class="attr-label">Bloques</div>
-                        <div class="attr-value">${attrs.total_blocks}</div>
+                        <div class="attr-value">${a.total_blocks}</div>
                     </div>
-                    <div class="attr-item">
+                    <div class="attr-card">
+                        <div class="attr-label">ID</div>
+                        <div class="attr-value" style="font-size:0.8em;">${selectedFile.file_id}</div>
+                    </div>
+                    <div class="attr-card">
                         <div class="attr-label">Creado</div>
-                        <div class="attr-value">${formatDate(attrs.created_at)}</div>
+                        <div class="attr-value" style="font-size:0.9em;">${formatDate(a.created_at)}</div>
                     </div>
-                    <div class="attr-item">
+                    <div class="attr-card">
                         <div class="attr-label">Replicación</div>
-                        <div class="attr-value">✅ Cada bloque tiene réplica</div>
+                        <div class="attr-value">✅ Completa</div>
                     </div>
                 `;
 
-                document.getElementById('blocks-detail').innerHTML = (attrs.blocks_detail || []).map(b => `
+                document.getElementById('blocks-tbody').innerHTML = (a.blocks_detail || []).map(b => `
                     <tr>
                         <td>${b.block_num}</td>
                         <td>${formatSize(b.size)}</td>
-                        <td><span class="block-badge primary">${b.primary_node}</span> ${!nodeStatus[b.primary_node] ? '⚠️' : ''}</td>
-                        <td><span class="block-badge replica">${b.replica_node}</span> ${!nodeStatus[b.replica_node] ? '⚠️' : ''}</td>
-                        <td><code style="color:var(--text-muted);">${(b.hash || '').substring(0, 8)}...</code></td>
+                        <td><span class="badge badge-primary">${b.primary_node}</span></td>
+                        <td><span class="badge badge-replica">${b.replica_node}</span></td>
+                        <td><code style="color:var(--gray);font-size:0.8em;">${(b.hash || '').substring(0, 8)}...</code></td>
                     </tr>
                 `).join('');
 
-                openModal('modal-attributes');
-            } else {
-                showToast(`❌ ${data.message}`, 'error');
+                openModal('modal-attr');
             }
-        })
-        .catch(e => showToast('❌ Error al obtener atributos', 'error'));
+        });
 }
 
-function showBlockTable() {
+function showTable() {
     Promise.all([
         fetch('/api/block_table').then(r => r.json()),
         fetch('/api/system_stats').then(r => r.json())
-    ])
-        .then(([tableData, statsData]) => {
-            if (tableData.status === 'ok' && statsData.status === 'ok') {
-                const blocks = tableData.block_table.blocks || {};
-                const stats = statsData.stats;
-
-                document.getElementById('system-stats').innerHTML = `
-                <div class="attr-item">
-                    <div class="attr-label">Total Archivos</div>
-                    <div class="attr-value">${stats.total_files}</div>
+    ]).then(([table, stats]) => {
+        if (table.status === 'ok' && stats.status === 'ok') {
+            const s = stats.stats;
+            document.getElementById('stats-grid').innerHTML = `
+                <div class="attr-card">
+                    <div class="attr-label">Archivos</div>
+                    <div class="attr-value">${s.total_files}</div>
                 </div>
-                <div class="attr-item">
-                    <div class="attr-label">Total Bloques</div>
-                    <div class="attr-value">${stats.total_blocks}</div>
+                <div class="attr-card">
+                    <div class="attr-label">Bloques</div>
+                    <div class="attr-value">${s.total_blocks}</div>
                 </div>
-                ${Object.keys(stats.node_capacity).map(node => `
-                    <div class="attr-item">
-                        <div class="attr-label">${node}</div>
+                ${Object.keys(s.node_capacity).map(n => `
+                    <div class="attr-card">
+                        <div class="attr-label">${n}</div>
                         <div class="attr-value">
-                            ${stats.node_usage[node] || 0} / ${stats.node_capacity[node]} MB
-                            <span class="block-badge ${nodeStatus[node] ? 'primary' : 'replica'}">${nodeStatus[node] ? 'Online' : 'Offline'}</span>
+                            ${s.node_usage[n] || 0} / ${s.node_capacity[n]} MB
+                            <span class="badge ${nodeStatus[n] ? 'badge-online' : 'badge-offline'}" style="margin-left:8px;font-size:0.75em;">
+                                ${nodeStatus[n] ? 'Online' : 'Offline'}
+                            </span>
                         </div>
                     </div>
                 `).join('')}
             `;
 
-                const blocksList = Object.values(blocks);
-                if (blocksList.length === 0) {
-                    document.getElementById('all-blocks').innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);">No hay bloques</td></tr>';
-                } else {
-                    document.getElementById('all-blocks').innerHTML = blocksList.map(b => `
+            const blocks = Object.values(table.block_table.blocks || {});
+            if (blocks.length === 0) {
+                document.getElementById('table-tbody').innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--gray);">No hay bloques</td></tr>';
+            } else {
+                document.getElementById('table-tbody').innerHTML = blocks.map(b => `
                     <tr>
                         <td><code style="font-size:0.75em;">${b.block_id.substring(0, 12)}...</code></td>
                         <td>${b.original_filename || 'N/A'}</td>
                         <td>${b.block_num}</td>
                         <td>${formatSize(b.size)}</td>
-                        <td><span class="block-badge primary">${b.primary_node}</span></td>
-                        <td><span class="block-badge replica">${b.replica_node}</span></td>
-                        <td><span class="block-badge primary">${b.status}</span></td>
+                        <td><span class="badge badge-primary">${b.primary_node}</span></td>
+                        <td><span class="badge badge-replica">${b.replica_node}</span></td>
                     </tr>
                 `).join('');
-                }
-
-                openModal('modal-block-table');
             }
-        })
-        .catch(e => showToast('❌ Error al cargar tabla', 'error'));
+
+            openModal('modal-table');
+        }
+    });
 }
 
-function formatSize(bytes) {
-    if (!bytes) return '0 B';
+function openModal(id) {
+    const m = document.getElementById(id);
+    m.style.display = 'flex';
+    gsap.fromTo(m, { opacity: 0 }, { opacity: 1, duration: 0.3 });
+    gsap.fromTo(m.querySelector('.modal-content'), { scale: 0.9, y: 50 }, { scale: 1, y: 0, duration: 0.4, ease: "back.out(1.7)" });
+}
+
+function closeModal(id) {
+    const m = document.getElementById(id);
+    gsap.to(m, { opacity: 0, duration: 0.2, onComplete: () => m.style.display = 'none' });
+}
+
+function toast(msg, type = 'info') {
+    const container = document.getElementById('toast-container');
+    const t = document.createElement('div');
+    t.className = `toast ${type}`;
+    t.innerHTML = `<span class="toast-icon">${type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️'}</span><div>${msg}</div>`;
+    container.appendChild(t);
+
+    gsap.fromTo(t, { x: 50, opacity: 0 }, { x: 0, opacity: 1, duration: 0.4, ease: "back.out(1.7)" });
+
+    setTimeout(() => {
+        gsap.to(t, { x: 50, opacity: 0, duration: 0.3, onComplete: () => t.remove() });
+    }, 4000);
+}
+
+function formatSize(b) {
+    if (!b) return '0 B';
     const k = 1024;
     const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    const i = Math.floor(Math.log(b) / Math.log(k));
+    return parseFloat((b / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
 function formatDate(ts) {
@@ -414,58 +296,4 @@ function formatDate(ts) {
     return new Date(ts * 1000).toLocaleString('es-MX');
 }
 
-function openModal(id) {
-    const modal = document.getElementById(id);
-    const content = modal.querySelector('.modal-content');
-
-    modal.style.display = 'block';
-
-    // Animación de entrada modal
-    gsap.to(modal, { opacity: 1, duration: 0.3 });
-    gsap.fromTo(content,
-        { scale: 0.8, opacity: 0, y: 20 },
-        { scale: 1, opacity: 1, y: 0, duration: 0.5, ease: 'back.out(1.2)' }
-    );
-}
-
-function closeModal(id) {
-    const modal = document.getElementById(id);
-    const content = modal.querySelector('.modal-content');
-
-    // Animación de salida modal
-    gsap.to(content, { scale: 0.8, opacity: 0, y: 20, duration: 0.3, ease: 'power2.in' });
-    gsap.to(modal, {
-        opacity: 0,
-        duration: 0.3,
-        delay: 0.1,
-        onComplete: () => { modal.style.display = 'none'; }
-    });
-}
-
-function showToast(msg, type = 'info') {
-    const container = document.getElementById('toast-container');
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    toast.innerHTML = msg;
-    container.appendChild(toast);
-
-    // Animación de entrada toast
-    gsap.to(toast, { x: 0, opacity: 1, duration: 0.5, ease: 'back.out(1.2)' });
-
-    setTimeout(() => {
-        // Animación de salida toast
-        gsap.to(toast, {
-            x: 100,
-            opacity: 0,
-            duration: 0.5,
-            ease: 'power2.in',
-            onComplete: () => toast.remove()
-        });
-    }, 4000);
-}
-
-window.onclick = function (e) {
-    if (e.target.classList.contains('modal')) {
-        closeModal(e.target.id);
-    }
-}
+window.onclick = e => { if (e.target.classList.contains('modal')) closeModal(e.target.id); }
