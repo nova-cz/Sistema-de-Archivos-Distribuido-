@@ -355,6 +355,108 @@ def get_system_stats():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 
+@app.route('/api/cleanup_orphan_blocks', methods=['POST'])
+def cleanup_orphan_blocks():
+    """
+    API para limpiar bloques huérfanos (bloques sin archivo en file_index).
+    
+    Útil para limpiar bloques de archivos que se subieron parcialmente.
+    """
+    try:
+        # Obtener tablas
+        block_table = node.get_block_table()
+        file_index = node.block_manager.get_file_index()
+        
+        # Encontrar file_ids válidos
+        valid_file_ids = set(file_index.keys())
+        
+        # Encontrar bloques huérfanos
+        all_blocks = block_table.get("blocks", {})
+        orphan_blocks = {}
+        orphan_file_ids = set()
+        
+        for block_id, block_info in all_blocks.items():
+            file_id = block_info.get("file_id")
+            if file_id and file_id not in valid_file_ids:
+                orphan_blocks[block_id] = block_info
+                orphan_file_ids.add(file_id)
+        
+        if not orphan_blocks:
+            return jsonify({
+                "status": "ok",
+                "message": "No hay bloques huérfanos",
+                "orphan_count": 0
+            })
+        
+        # Eliminar bloques huérfanos
+        deleted_count = 0
+        failed_count = 0
+        
+        with node.block_manager.lock:
+            for block_id in orphan_blocks.keys():
+                try:
+                    block_info = orphan_blocks[block_id]
+                    
+                    # Eliminar del nodo primario
+                    primary_node = block_info.get("primary_node")
+                    if primary_node == node.node_name:
+                        node.block_manager.delete_block_locally(block_id)
+                    elif primary_node and node.network_manager:
+                        node.block_manager._delete_block_from_node(block_id, primary_node)
+                    
+                    # Eliminar réplica
+                    replica_node = block_info.get("replica_node")
+                    if replica_node == node.node_name:
+                        node.block_manager.delete_block_locally(block_id)
+                    elif replica_node and node.network_manager:
+                        node.block_manager._delete_block_from_node(block_id, replica_node)
+                    
+                    # Actualizar uso de nodos
+                    if primary_node and primary_node in block_table.get("node_usage", {}):
+                        block_table["node_usage"][primary_node] = max(0, block_table["node_usage"][primary_node] - 1)
+                    if replica_node and replica_node in block_table.get("node_usage", {}):
+                        block_table["node_usage"][replica_node] = max(0, block_table["node_usage"][replica_node] - 1)
+                    
+                    # Eliminar de tabla de bloques
+                    if block_id in block_table.get("blocks", {}):
+                        del block_table["blocks"][block_id]
+                    
+                    deleted_count += 1
+                except Exception as e:
+                    logging.error(f"Error al eliminar bloque huérfano {block_id}: {e}")
+                    failed_count += 1
+            
+            # Guardar cambios
+            node.block_manager.block_table = block_table
+            node.block_manager._save_block_table()
+        
+        # Propagar limpieza a otros nodos
+        node_status = node.network_manager.get_node_status()
+        for other_node, is_alive in node_status.items():
+            if other_node != node.node_name and is_alive:
+                try:
+                    message = {
+                        "type": "cleanup_orphan_blocks",
+                        "source_node": node.node_name,
+                        "orphan_file_ids": list(orphan_file_ids),
+                        "timestamp": time.time()
+                    }
+                    node.network_manager._send_message(other_node, message)
+                except:
+                    pass
+        
+        return jsonify({
+            "status": "ok",
+            "message": f"Bloques huérfanos eliminados: {deleted_count}",
+            "deleted": deleted_count,
+            "failed": failed_count,
+            "orphan_file_ids": list(orphan_file_ids)
+        })
+        
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+
 # ==================== INICIO DE LA APLICACIÓN ====================
 
 def start_node():

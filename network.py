@@ -427,6 +427,37 @@ class NetworkManager:
                 else:
                     return {"status": "error", "message": "Error al eliminar archivo"}
         
+        elif message_type == "cleanup_orphan_blocks":
+            """Limpia bloques huérfanos en este nodo"""
+            if not self.block_manager:
+                return {"status": "error", "message": "Block manager no disponible"}
+            
+            orphan_file_ids = message.get("orphan_file_ids", [])
+            logger.info(f"Limpiando bloques huérfanos de {len(orphan_file_ids)} archivos por solicitud de {source_node}")
+            
+            deleted = 0
+            block_table = self.block_manager.get_block_table()
+            
+            with self.block_manager.lock:
+                blocks_to_delete = []
+                for block_id, block_info in list(block_table.get("blocks", {}).items()):
+                    if block_info.get("file_id") in orphan_file_ids:
+                        blocks_to_delete.append(block_id)
+                
+                for block_id in blocks_to_delete:
+                    try:
+                        self.block_manager.delete_block_locally(block_id)
+                        if block_id in block_table.get("blocks", {}):
+                            del block_table["blocks"][block_id]
+                        deleted += 1
+                    except:
+                        pass
+                
+                self.block_manager.block_table = block_table
+                self.block_manager._save_block_table()
+            
+            return {"status": "ok", "deleted": deleted}
+        
         else:
             logger.warning(f"Tipo de mensaje desconocido: {message_type}")
             return {"status": "error", "message": "Tipo de mensaje desconocido"}
