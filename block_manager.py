@@ -14,7 +14,10 @@ import threading
 import time
 import hashlib
 import base64
+import logging
 from config import SHARED_DIR, NODES, NODE_NAME, BLOCK_SIZE, NODE_CAPACITY
+
+logger = logging.getLogger('sistema.block_manager')
 
 # Archivo donde se guarda la tabla de bloques global
 BLOCK_TABLE_FILE = os.path.join(SHARED_DIR, "block_table.json")
@@ -514,56 +517,113 @@ class BlockManager:
     def delete_file(self, file_id):
         """
         Elimina un archivo y todos sus bloques del sistema.
+        Tolerante a fallos: elimina el archivo aunque algunos nodos estén desconectados.
         
         Args:
             file_id: ID del archivo a eliminar
             
         Returns:
-            True si se eliminó correctamente
+            Diccionario con el resultado: {
+                "success": bool,
+                "blocks_deleted": int,
+                "blocks_failed": int,
+                "failed_nodes": list
+            }
         """
         with self.lock:
             if file_id not in self.file_index:
-                return False
+                return {
+                    "success": False,
+                    "blocks_deleted": 0,
+                    "blocks_failed": 0,
+                    "failed_nodes": [],
+                    "error": "File not found"
+                }
             
             file_info = self.file_index[file_id]
             block_ids = file_info["block_ids"]
+            
+            blocks_deleted = 0
+            blocks_failed = 0
+            failed_nodes = set()
             
             # Eliminar cada bloque
             for block_id in block_ids:
                 block_info = self.block_table.get("blocks", {}).get(block_id, {})
                 
-                # Eliminar del nodo primario
+                # Intentar eliminar del nodo primario
                 primary_node = block_info.get("primary_node")
-                if primary_node == self.node_name:
-                    self.delete_block_locally(block_id)
-                elif primary_node and self.network_manager:
-                    self._delete_block_from_node(block_id, primary_node)
+                if primary_node:
+                    if primary_node == self.node_name:
+                        if self.delete_block_locally(block_id):
+                            blocks_deleted += 1
+                        else:
+                            blocks_failed += 1
+                    elif self.network_manager:
+                        # Verificar si el nodo está online
+                        node_status = self.network_manager.get_node_status()
+                        if node_status.get(primary_node, False):
+                            # Nodo online: intentar eliminar
+                            if self._delete_block_from_node(block_id, primary_node):
+                                blocks_deleted += 1
+                            else:
+                                blocks_failed += 1
+                                failed_nodes.add(primary_node)
+                        else:
+                            # Nodo offline: marcar como fallido pero continuar
+                            blocks_failed += 1
+                            failed_nodes.add(primary_node)
+                            logger.warning(f"Nodo {primary_node} no disponible. El bloque {block_id} se eliminará de la tabla pero permanecerá en el nodo hasta que se reconecte.")
                 
-                # Eliminar réplica
+                # Intentar eliminar réplica
                 replica_node = block_info.get("replica_node")
-                if replica_node == self.node_name:
-                    self.delete_block_locally(block_id)
-                elif replica_node and self.network_manager:
-                    self._delete_block_from_node(block_id, replica_node)
+                if replica_node:
+                    if replica_node == self.node_name:
+                        if self.delete_block_locally(block_id):
+                            blocks_deleted += 1
+                        else:
+                            blocks_failed += 1
+                    elif self.network_manager:
+                        # Verificar si el nodo está online
+                        node_status = self.network_manager.get_node_status()
+                        if node_status.get(replica_node, False):
+                            # Nodo online: intentar eliminar
+                            if self._delete_block_from_node(block_id, replica_node):
+                                blocks_deleted += 1
+                            else:
+                                blocks_failed += 1
+                                failed_nodes.add(replica_node)
+                        else:
+                            # Nodo offline: marcar como fallido pero continuar
+                            blocks_failed += 1
+                            failed_nodes.add(replica_node)
+                            logger.warning(f"Nodo {replica_node} no disponible. El bloque {block_id} se eliminará de la tabla pero permanecerá en el nodo hasta que se reconecte.")
                 
-                # Actualizar uso de nodos
+                # Actualizar uso de nodos (siempre, aunque el nodo no esté disponible)
                 if primary_node and primary_node in self.block_table.get("node_usage", {}):
                     self.block_table["node_usage"][primary_node] = max(0, self.block_table["node_usage"][primary_node] - 1)
                 if replica_node and replica_node in self.block_table.get("node_usage", {}):
                     self.block_table["node_usage"][replica_node] = max(0, self.block_table["node_usage"][replica_node] - 1)
                 
-                # Eliminar de tabla de bloques
+                # Eliminar de tabla de bloques (siempre, para mantener consistencia)
                 if block_id in self.block_table.get("blocks", {}):
                     del self.block_table["blocks"][block_id]
             
-            # Eliminar del índice de archivos
+            # Eliminar del índice de archivos (siempre)
             del self.file_index[file_id]
             
             # Guardar cambios
             self._save_block_table()
             self._save_file_index()
             
-            return True
+            logger.info(f"Archivo {file_id} eliminado: {blocks_deleted} bloques eliminados, {blocks_failed} bloques no disponibles en nodos: {list(failed_nodes)}")
+            
+            return {
+                "success": True,
+                "blocks_deleted": blocks_deleted,
+                "blocks_failed": blocks_failed,
+                "failed_nodes": list(failed_nodes)
+            }
     
     def _delete_block_from_node(self, block_id, node):
         """Solicita eliminación de un bloque en un nodo remoto"""

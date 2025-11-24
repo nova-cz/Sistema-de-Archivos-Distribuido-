@@ -199,15 +199,57 @@ class Node:
     
     def delete_distributed_file(self, file_id):
         """
-        Elimina un archivo distribuido y todos sus bloques.
+        Elimina un archivo distribuido y todos sus bloques del sistema COMPLETO.
+        Propaga la eliminación a TODOS los nodos para prevenir que la sincronización
+        lo restaure.
         
         Args:
             file_id: ID del archivo a eliminar
             
         Returns:
-            True si se eliminó correctamente
+            Diccionario con el resultado de la eliminación
         """
-        return self.block_manager.delete_file(file_id)
+        import logging
+        logger = logging.getLogger('sistema.node')
+        
+        # Primero eliminar localmente
+        logger.info(f"Eliminando archivo distribuido {file_id}")
+        result = self.block_manager.delete_file(file_id)
+        
+        if not isinstance(result, dict) or not result.get("success"):
+            return result
+        
+        # Propagar eliminación a TODOS los nodos activos
+        node_status = self.network_manager.get_node_status()
+        propagation_failures = []
+        
+        for node, is_alive in node_status.items():
+            if node != self.node_name and is_alive:
+                try:
+                    message = {
+                        "type": "delete_distributed_file",
+                        "source_node": self.node_name,
+                        "file_id": file_id,
+                        "timestamp": time.time()
+                    }
+                    
+                    response = self.network_manager._send_message(node, message)
+                    if not response or response.get("status") != "ok":
+                        propagation_failures.append(node)
+                        logger.warning(f"No se pudo propagar eliminación de {file_id} a {node}")
+                    else:
+                        logger.info(f"Eliminación de {file_id} propagada exitosamente a {node}")
+                        
+                except Exception as e:
+                    propagation_failures.append(node)
+                    logger.error(f"Error al propagar eliminación a {node}: {e}")
+        
+        # Agregar información de propagación al resultado
+        result["propagation_failures"] = propagation_failures
+        if propagation_failures:
+            result["warning"] = f"No se pudo propagar a: {', '.join(propagation_failures)}"
+        
+        return result
     
     def get_file_attributes(self, file_id):
         """

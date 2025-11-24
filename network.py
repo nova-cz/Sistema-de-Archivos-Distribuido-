@@ -406,6 +406,27 @@ class NetworkManager:
             stats = self.block_manager.get_system_stats()
             return {"status": "ok", "stats": stats}
         
+        elif message_type == "delete_distributed_file":
+            """Elimina un archivo distribuido de este nodo"""
+            if not self.block_manager:
+                return {"status": "error", "message": "Block manager no disponible"}
+            
+            file_id = message.get("file_id")
+            logger.info(f"Eliminando archivo distribuido {file_id} por solicitud de {source_node}")
+            
+            result = self.block_manager.delete_file(file_id)
+            
+            if isinstance(result, dict) and result.get("success"):
+                return {"status": "ok", "result": result}
+            elif isinstance(result, dict):
+                return {"status": "error", "message": result.get("error", "Error desconocido")}
+            else:
+                # Legacy response (bool)
+                if result:
+                    return {"status": "ok"}
+                else:
+                    return {"status": "error", "message": "Error al eliminar archivo"}
+        
         else:
             logger.warning(f"Tipo de mensaje desconocido: {message_type}")
             return {"status": "error", "message": "Tipo de mensaje desconocido"}

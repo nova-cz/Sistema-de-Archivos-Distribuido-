@@ -198,14 +198,34 @@ def download_file(file_id):
 def delete_distributed_file(file_id):
     """
     API para eliminar un archivo distribuido y todos sus bloques.
+    Tolerante a fallos: elimina el archivo aunque algunos nodos estén desconectados.
     """
     try:
-        success = node.delete_distributed_file(file_id)
+        result = node.delete_distributed_file(file_id)
         
-        if success:
-            return jsonify({"status": "ok", "message": "Archivo eliminado correctamente"})
+        if isinstance(result, dict):
+            # Nueva respuesta detallada
+            if result.get("success"):
+                message = f"Archivo eliminado: {result.get('blocks_deleted', 0)} bloques eliminados"
+                if result.get("blocks_failed", 0) > 0:
+                    message += f", {result['blocks_failed']} bloques no disponibles (nodos offline: {', '.join(result.get('failed_nodes', []))})"
+                
+                return jsonify({
+                    "status": "ok", 
+                    "message": message,
+                    "details": result
+                })
+            else:
+                return jsonify({
+                    "status": "error", 
+                    "message": result.get("error", "Error al eliminar archivo")
+                })
         else:
-            return jsonify({"status": "error", "message": "Error al eliminar archivo"})
+            # Respuesta legacy (bool)
+            if result:
+                return jsonify({"status": "ok", "message": "Archivo eliminado correctamente"})
+            else:
+                return jsonify({"status": "error", "message": "Error al eliminar archivo"})
             
     except Exception as e:
         return jsonify({"status": "error", "message": f"Error: {str(e)}"})
