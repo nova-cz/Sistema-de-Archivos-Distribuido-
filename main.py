@@ -199,6 +199,7 @@ def delete_distributed_file(file_id):
     """
     API para eliminar un archivo distribuido y todos sus bloques.
     Tolerante a fallos: elimina el archivo aunque algunos nodos estén desconectados.
+    Maneja archivos huérfanos (bloques sin entrada en file_index).
     """
     try:
         result = node.delete_distributed_file(file_id)
@@ -214,6 +215,74 @@ def delete_distributed_file(file_id):
                     "status": "ok", 
                     "message": message,
                     "details": result
+                })
+            elif result.get("error") == "File not found":
+                # Archivo no existe en file_index, pero podría tener bloques huérfanos
+                # Intentar eliminar bloques huérfanos con este file_id
+                logging.info(f"Archivo {file_id} no en índice, buscando bloques huérfanos...")
+                
+                block_table = node.get_block_table()
+                orphan_blocks = {}
+                
+                # Buscar bloques de este file_id
+                for block_id, block_info in block_table.get("blocks", {}).items():
+                    if block_info.get("file_id") == file_id:
+                        orphan_blocks[block_id] = block_info
+                
+                if not orphan_blocks:
+                    return jsonify({
+                        "status": "error",
+                        "message": "Archivo no encontrado y no tiene bloques"
+                    })
+                
+                # Eliminar bloques huérfanos
+                deleted = 0
+                with node.block_manager.lock:
+                    for block_id, block_info in orphan_blocks.items():
+                        try:
+                            # Eliminar localmente
+                            primary_node = block_info.get("primary_node")
+                            if primary_node == node.node_name:
+                                node.block_manager.delete_block_locally(block_id)
+                            elif primary_node:
+                                node.block_manager._delete_block_from_node(block_id, primary_node)
+                            
+                            replica_node = block_info.get("replica_node")
+                            if replica_node == node.node_name:
+                                node.block_manager.delete_block_locally(block_id)
+                            elif replica_node:
+                                node.block_manager._delete_block_from_node(block_id, replica_node)
+                            
+                            # Eliminar de tabla
+                            if block_id in block_table.get("blocks", {}):
+                                del block_table["blocks"][block_id]
+                            
+                            deleted += 1
+                        except:
+                            pass
+                    
+                    node.block_manager.block_table = block_table
+                    node.block_manager._save_block_table()
+                
+                # Propagar a otros nodos
+                node_status = node.network_manager.get_node_status()
+                for other_node, is_alive in node_status.items():
+                    if other_node != node.node_name and is_alive:
+                        try:
+                            message_data = {
+                                "type": "cleanup_orphan_blocks",
+                                "source_node": node.node_name,
+                                "orphan_file_ids": [file_id],
+                                "timestamp": time.time()
+                            }
+                            node.network_manager._send_message(other_node, message_data)
+                        except:
+                            pass
+                
+                return jsonify({
+                    "status": "ok",
+                    "message": f"Bloques huérfanos eliminados: {deleted}",
+                    "details": {"blocks_deleted": deleted, "was_orphan": True}
                 })
             else:
                 return jsonify({
