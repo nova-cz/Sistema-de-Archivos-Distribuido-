@@ -128,9 +128,10 @@ class Node:
         """
         Sube un archivo al sistema distribuido.
         
-        1. Divide el archivo en bloques de 1 MB
-        2. Asigna nodos para cada bloque y su réplica
-        3. Distribuye los bloques a los nodos
+        1. VALIDA que el archivo quepa en el sistema
+        2. Divide el archivo en bloques de 1 MB
+        3. Asigna nodos para cada bloque y su réplica
+        4. Distribuye los bloques a los nodos
         
         Args:
             file_path: Ruta temporal del archivo subido
@@ -139,12 +140,36 @@ class Node:
         Returns:
             Diccionario con resultado de la operación
         """
+        import logging
+        logger = logging.getLogger('sistema.node')
+        
         try:
             # Verificar que el archivo existe
             if not os.path.exists(file_path):
                 return {"status": "error", "message": "Archivo no encontrado"}
             
             file_size = os.path.getsize(file_path)
+            file_size_mb = file_size / (1024 * 1024)
+            logger.info(f"Subiendo archivo: {original_filename} ({file_size_mb:.2f} MB)")
+            
+            # VALIDACIÓN: Verificar que el archivo quepa en el sistema
+            stats = self.block_manager.get_system_stats()
+            total_free_space = sum(stats.get("node_free_space", {}).values())
+            
+            # Considerar que cada bloque necesita espacio primario + réplica
+            blocks_needed = (file_size + self.block_manager.block_size - 1) // self.block_manager.block_size
+            space_needed = blocks_needed * 2  # Primario + Réplica (en MB)
+            
+            if space_needed > total_free_space:
+                error_msg = f"Archivo demasiado grande: necesita {space_needed} MB pero solo hay {total_free_space} MB disponibles (considerando réplicas)"
+                logger.error(error_msg)
+                return {
+                    "status": "error",
+                    "message": error_msg,
+                    "required_space": space_needed,
+                    "available_space": total_free_space
+                }
+            
             print(f"Subiendo archivo: {original_filename} ({file_size} bytes)")
             
             # 1. Dividir en bloques
@@ -162,6 +187,7 @@ class Node:
             success = self.block_manager.distribute_blocks(allocated_blocks, file_id, original_filename)
             
             if success:
+                logger.info(f"Archivo {original_filename} subido exitosamente: {len(blocks)} bloques")
                 return {
                     "status": "ok",
                     "file_id": file_id,
@@ -170,10 +196,22 @@ class Node:
                     "size": file_size
                 }
             else:
-                return {"status": "error", "message": "Error al distribuir bloques"}
+                # Si falla la distribución, limpiar el archivo parcialmente subido
+                logger.error(f"Error al distribuir bloques de {original_filename}, limpiando...")
+                try:
+                    self.block_manager.delete_file(file_id)
+                except:
+                    pass
+                return {"status": "error", "message": "Error al distribuir bloques. El archivo no se subió."}
                 
         except Exception as e:
-            print(f"Error al subir archivo: {e}")
+            logger.error(f"Error al subir archivo {original_filename}: {e}")
+            # Intentar limpiar si se creó un file_id
+            try:
+                if 'file_id' in locals():
+                    self.block_manager.delete_file(file_id)
+            except:
+                pass
             return {"status": "error", "message": str(e)}
     
     def download_file(self, file_id):
