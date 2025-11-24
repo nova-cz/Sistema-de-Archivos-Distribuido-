@@ -277,3 +277,26 @@ h1 {
 .toast.success { border-left: 3px solid var(--mint); }
 .toast.error { border-left: 3px solid var(--coral); }
 .toast.info { border-left: 3px solid var(--gold); }
+
+.btn-delete-small {
+    background: var(--danger);
+    color: white;
+    border: none;
+    padding: 4px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.2s;
+}
+
+.btn-delete-small:hover {
+    transform: scale(1.1);
+    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+}
+
+.empty-state {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--gray);
+    font-style: italic;
+}

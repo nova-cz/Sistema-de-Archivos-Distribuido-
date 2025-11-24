@@ -4,10 +4,8 @@ import netifaces
 import logging
 import subprocess
 
-IP_1 = "172.26.164.205"
-IP_2 = "172.26.161.192"
-IP_3 = "172.26.160.112"
-IP_4 = "172.26.164.208"
+IP_1 = "172.31.9.131"      # Tu IP
+IP_2 = "172.31.9.195"      # IP de tu amigo
 
 # Configurar logging
 logging.basicConfig(
@@ -20,20 +18,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger('sistema')
 
-THIS_NODE = "Maq1"  # Opciones: "Maq1", "Maq2", "Maq3", "Maq4"
+THIS_NODE = "Maq1"  # TÚ: "Maq1", TU AMIGO: "Maq2"
 
 # ==================== NUEVA CONFIGURACIÓN DE BLOQUES ====================
 
-# Tamaño de bloque en bytes (1 MB = 1024 * 1024 bytes)
 BLOCK_SIZE = 1024 * 1024  # 1 MB
 
-# Capacidad de almacenamiento por nodo en MB
-# ¡FÁCIL DE CAMBIAR! Solo modifica estos valores
 NODE_CAPACITY = {
     "Maq1": 70,   # 70 MB para Maq1
     "Maq2": 50,   # 50 MB para Maq2
-    "Maq3": 100,  # 100 MB para Maq3
-    "Maq4": 80,   # 80 MB para Maq4 (si lo usas)
 }
 
 # ========================================================================
@@ -43,8 +36,6 @@ def get_ip_address():
     node_ips = {
         "Maq1": IP_1,
         "Maq2": IP_2,
-        "Maq3": IP_3,
-        "Maq4": IP_4
     }
     
     if THIS_NODE in node_ips:
@@ -87,7 +78,6 @@ def detect_ip_automatically():
         except Exception as e:
             logger.warning(f"Error al usar ifconfig/ip/ipconfig: {e}")
         
-        # Si no funciona, usar netifaces
         interfaces = netifaces.interfaces()
         for interface in interfaces:
             logger.debug(f"Revisando interfaz: {interface}")
@@ -106,25 +96,21 @@ def detect_ip_automatically():
         logger.error(f"Error al obtener IP: {e}")
         return "192.168.1.101"
 
-# Obtiene el nombre de host de la máquina actual
 HOSTNAME = socket.gethostname()
 logger.info(f"Nombre del host: {HOSTNAME}")
 
-# Obtiene la dirección IP de la máquina actual basada en el nodo configurado
 IP_ADDRESS = get_ip_address()
 logger.info(f"IP seleccionada: {IP_ADDRESS}")
 
+# ========== SOLO 2 NODOS ==========
 NODES = {
     "Maq1": {"ip": IP_1, "port": 8080},
     "Maq2": {"ip": IP_2, "port": 8080},
-    "Maq3": {"ip": IP_3, "port": 8080},
 }
     
-# Asignamos directamente el nombre del nodo
 NODE_NAME = THIS_NODE
 logger.info(f"Este nodo se identificó como: {NODE_NAME}")
     
-# Verificamos que el nodo exista en la configuración
 if NODE_NAME not in NODES:
     logger.error(f"El nodo '{NODE_NAME}' no existe en la configuración NODES.")
     logger.info("Nodos disponibles:")
@@ -133,42 +119,33 @@ if NODE_NAME not in NODES:
     logger.error("Por favor, corrige la variable THIS_NODE.")
     exit(1)
 
-# Verificamos que la IP coincida
 if NODES[NODE_NAME]["ip"] != IP_ADDRESS:
     logger.error(f"La IP configurada para {NODE_NAME} ({NODES[NODE_NAME]['ip']}) no coincide con la IP seleccionada ({IP_ADDRESS}).")
     logger.error("Por favor, verifica la configuración de nodos y la variable THIS_NODE.")
     exit(1)
 
-# Puerto para la interfaz web
 WEB_PORT = NODES[NODE_NAME]["port"]
 logger.info(f"Puerto web: {WEB_PORT}")
 
-# Puerto para la comunicación entre nodos
 NETWORK_PORT = 8081
 logger.info(f"Puerto de red: {NETWORK_PORT}")
 
-# Directorio para archivos compartidos
 SHARED_DIR = os.path.join(os.path.expanduser("."), "shared_dir")
 os.makedirs(SHARED_DIR, exist_ok=True)
 logger.info(f"Directorio compartido: {SHARED_DIR}")
 
-# Archivo de registro de operaciones
 LOG_FILE = os.path.join(SHARED_DIR, "operations.json")
 logger.info(f"Archivo de log: {LOG_FILE}")
 
-# Archivo de registro de operaciones pendientes
 PENDING_LOG_FILE = os.path.join(SHARED_DIR, "pending_operations.json")
 logger.info(f"Archivo de log pendiente: {PENDING_LOG_FILE}")
 
-# Intervalo de heartbeat en segundos
 HEARTBEAT_INTERVAL = 3
 logger.info(f"Intervalo de heartbeat: {HEARTBEAT_INTERVAL} segundos")
 
-# Tiempo máximo sin recibir heartbeat antes de considerar un nodo caído (segundos)
 NODE_TIMEOUT = 8
 logger.info(f"Timeout de nodo: {NODE_TIMEOUT} segundos")
 
-# ==================== INFO DE CAPACIDAD ====================
 logger.info("=== Configuración de capacidad de nodos ===")
 for node, capacity in NODE_CAPACITY.items():
     logger.info(f"  {node}: {capacity} MB")
