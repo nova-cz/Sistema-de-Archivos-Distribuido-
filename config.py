@@ -4,8 +4,9 @@ import netifaces
 import logging
 import subprocess
 
-IP_1 = "172.31.9.131"      # Tu IP
-IP_2 = "172.31.9.195"      # IP de tu amigo
+IP_1 = "172.31.9.131"      # Tu IP (Maq1)
+IP_2 = "172.31.9.195"      # IP de tu amigo (Maq2)
+IP_3 = "172.26.160.1"       # IP tercera compu (Maq3)
 
 # Configurar logging
 logging.basicConfig(
@@ -18,7 +19,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger('sistema')
 
-THIS_NODE = "Maq1"  # TÚ: "Maq1", TU AMIGO: "Maq2"
+THIS_NODE = "Maq1"  # TÚ: "Maq1", AMIGO 1: "Maq2", AMIGO 2: "Maq3"
 
 # ==================== NUEVA CONFIGURACIÓN DE BLOQUES ====================
 
@@ -27,6 +28,7 @@ BLOCK_SIZE = 1024 * 1024  # 1 MB
 NODE_CAPACITY = {
     "Maq1": 70,   # 70 MB para Maq1
     "Maq2": 50,   # 50 MB para Maq2
+    "Maq3": 60,   # 60 MB para Maq3
 }
 
 # ========================================================================
@@ -36,6 +38,7 @@ def get_ip_address():
     node_ips = {
         "Maq1": IP_1,
         "Maq2": IP_2,
+        "Maq3": IP_3,
     }
     
     if THIS_NODE in node_ips:
@@ -102,10 +105,11 @@ logger.info(f"Nombre del host: {HOSTNAME}")
 IP_ADDRESS = get_ip_address()
 logger.info(f"IP seleccionada: {IP_ADDRESS}")
 
-# ========== SOLO 2 NODOS ==========
+# ========== 3 NODOS ==========
 NODES = {
     "Maq1": {"ip": IP_1, "port": 8080},
     "Maq2": {"ip": IP_2, "port": 8080},
+    "Maq3": {"ip": IP_3, "port": 8080},
 }
     
 NODE_NAME = THIS_NODE
