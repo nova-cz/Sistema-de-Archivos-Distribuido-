@@ -4,9 +4,9 @@ import netifaces
 import logging
 import subprocess
 
-IP_1 = "172.31.3.27"      # Tu IP (Maq1)
-IP_2 = "172.31.14.108"      # IP de tu amigo (Maq2)
-IP_3 = "172.31.3.141"       # IP tercera compu (Maq3)
+IP_1 = "172.31.13.238"      # Tu IP (Maq1)
+IP_2 = "172.31.2.148"      # IP de tu amigo (Maq2)
+IP_3 = "172.31.3.65"        # IP tercera compu (Maq3) 
 
 # Configurar logging
 logging.basicConfig(
